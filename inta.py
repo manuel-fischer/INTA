@@ -65,6 +65,9 @@ def multi_input(line):
 def error(*a, **kw):
     print(*a, **kw, file = sys.stderr)
 
+def info(*a, **kw):
+    print(*a, **kw)
+
 def as_number(s : str):
     try: return int(s)
     except ValueError: pass
@@ -109,7 +112,9 @@ class file:
     def read(self):
         if self.name == None: return ""
         with open(self.name, "rt") as f:
-            return f.read()
+            contents = f.read()
+            info("%i << %s"%(len(contents), f.name))
+            return contents
 
     def write(self, contents):
         if self.name == None:
@@ -117,6 +122,7 @@ class file:
             return
         with open(self.name, "wt") as f:
             f.write(contents)
+            info("%i >> %s"%(len(contents), self.name))
 
 
 class pseudo_file:
@@ -148,21 +154,30 @@ def inta_command(name, prefix=False):
         return func
     return register
 
-class inta:
 
+class util:
+    def split_lines(data, step):
+        splitted = data.split('\n')
+        if splitted[-1] == "": splitted.pop()
+        return {(i+1)*step : contents.rstrip() for i, contents in enumerate(splitted)}
+
+
+class inta:
     __slots__ = """
         running
         lines
         step
         file
+        allow_rebind
     """.split()
 
-    def __init__(self, file):
+    def __init__(self, file, allow_rebind=True):
         #self.running
-        self.lines = {}
+        self.lines = []
         self.step = 1
         self.file = file
         self.open(None)
+        self.allow_rebind = allow_rebind
 
     def run(self):
         self.running = True
@@ -211,13 +226,38 @@ class inta:
         lst = sorted(list(self.lines.items()), key=lambda kv: kv[0])
         if lines is not None:
             l, u = lines
-            if not l: l = self.min_line()
-            if not u: u = self.max_line()
+            if l is None: l = self.min_line()
+            if u is None: u = self.max_line()
             def is_in_range(lc):
                 line, contents = lc
                 return l <= line <= u
             lst = list(filter(is_in_range, lst))
         return lst
+
+    def remove_lines(self, lines):
+        to_remove = self.get_lines_sorted(lines)
+        for line, contents in to_remove:
+            self.remove_line(line)
+
+
+    def get_contents(self, lines=None):
+        lines = self.get_lines_sorted(lines)
+        return "".join(contents+"\n" for line, contents in lines)
+
+    def block_after(self, line):
+       lines = self.get_lines_sorted((line, None))
+       line0 = lines[0]
+       indent = lambda s: len(s) - len(s.lstrip())
+       indent_line0 = indent(line0[1])
+       if len(lines) == 1: return (line0[0]+step,None)
+       first_line = lines[1]
+       if indent(first_line[1]) <= indent_line0: return ((line0[0]+first_line[0])/2,)*2
+       last_line = first_line
+       for line in lines[2:]:
+           if line[1] == "": continue
+           if indent(line[1]) <= indent_line0: break
+           last_line = line
+       return (first_line[0], last_line[0])
 
 
     @inta_command("q")
@@ -243,19 +283,25 @@ class inta:
 
         step = self.step
         all = self.file.read()
-        split_lines = all.split('\n')
-        if split_lines[-1] == "": split_lines.pop()
-        self.lines = {(i+1)*step: contents.rstrip() for i, contents in enumerate(split_lines)}
+        self.lines = util.split_lines(all, step)
 
 
     @inta_command("w")
     @inta_command("save")
     def save(self, args):
+        self.file.write(self.get_contents())
 
-        step = self.step
-        lines = self.get_lines_sorted()
-        data = "".join(contents+"\n" for line, contents in lines)
-        self.file.write(data)
+    @inta_command("re")
+    @inta_command("rebind")
+    def cmd_rebind(self, args):
+        if not self.allow_rebind:
+            error("rebinding not allowed")
+            return
+        self.file = file(args or None) # None instead of ""
+
+    @inta_command("pwd")
+    def cmd_print_title(self, args):
+        print(self.file.title)
 
     @inta_command("n")
     @inta_command("numb")
@@ -267,8 +313,7 @@ class inta:
                 error(ERR_NUM)
                 return
 
-        lines = self.get_lines_sorted()
-        self.lines = {(i+1)*step: contents for i, (line, contents) in enumerate(lines)}
+        self.lines = util.split_lines(self.get_contents(), step)
 
 
     @inta_command("l")
@@ -285,7 +330,7 @@ class inta:
 
     @inta_command("lz")
     @inta_command("k")
-    def ls_zero(self, args):
+    def list_zero(self, args):
         lines = None
         if args:
             lines = parse_linerange(args)
@@ -301,6 +346,8 @@ class inta:
             if args in contents:
                 print(format_line(line, contents))
 
+    @inta_command("rm")
+    @inta_command("del")
     @inta_command("--", prefix=True)
     def cmd_remove_line(self, args):
         if not args: error(ERR_LINES)
@@ -342,6 +389,16 @@ class inta:
     @inta_command("v")
     def visit(self, args):
         pass # unindent following block and run inner instance of inta
+        line_head = as_number(args)
+        line_range = self.block_after(line_head)
+        line_contents = self.get_contents(line_range)
+        self.remove_lines(line_range)
+        pfile = pseudo_file("%s:%i"%(self.file.title, line_range[0]), line_contents)
+        inta(pfile, allow_rebind=False).run()
+        contents = pfile.contents
+        if contents == "": return
+        if contents[-1:] == "\n": contents = contents[:-1]
+        self.set_line(line_range[0], contents)
 
 
 if __name__ == "__main__":

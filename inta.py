@@ -111,7 +111,7 @@ class file:
 
     def read(self):
         if self.name == None: return ""
-        with open(self.name, "rt") as f:
+        with open(self.name, "rt", encoding="utf-8") as f:
             contents = f.read()
             info("%i << %s"%(len(contents), f.name))
             return contents
@@ -120,7 +120,7 @@ class file:
         if self.name == None:
             error(ERR_FILE_UNBOUND)
             return
-        with open(self.name, "wt") as f:
+        with open(self.name, "wt", encoding="utf-8") as f:
             f.write(contents)
             info("%i >> %s"%(len(contents), self.name))
 
